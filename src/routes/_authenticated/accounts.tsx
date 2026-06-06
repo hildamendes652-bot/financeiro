@@ -100,6 +100,16 @@ const rateSchema = z
     message: "As moedas devem ser diferentes",
   });
 
+// Exported for unit coverage without requiring database access.
+// eslint-disable-next-line react-refresh/only-export-components
+export function assertAccountCurrencyUnchanged(currentCurrency: string, nextCurrency: string) {
+  if (normalizeCurrency(currentCurrency) !== normalizeCurrency(nextCurrency)) {
+    throw new Error(
+      "A moeda de uma conta com histórico não pode ser alterada. Crie uma nova conta para usar outra moeda.",
+    );
+  }
+}
+
 function AccountsPage() {
   const qc = useQueryClient();
   const [accountOpen, setAccountOpen] = useState(false);
@@ -188,11 +198,20 @@ function AccountsPage() {
     mutationFn: async (input: z.infer<typeof accountSchema> & { id?: string }) => {
       const { data: auth } = await supabase.auth.getUser();
       if (!auth.user) throw new Error("Sessão expirada");
+      const existingAccount = input.id
+        ? accounts.find((account) => account.id === input.id)
+        : undefined;
+      if (input.id && !existingAccount) {
+        throw new Error("Conta não encontrada. Atualize a página e tente novamente.");
+      }
+      if (existingAccount) {
+        assertAccountCurrencyUnchanged(existingAccount.currency, input.currency);
+      }
       const payload = {
         user_id: auth.user.id,
         name: input.name,
         type: input.type,
-        currency: input.currency,
+        currency: existingAccount?.currency ?? input.currency,
         initial_balance: input.initial_balance,
       };
       const result = input.id
@@ -638,8 +657,15 @@ function AccountDialog({
               name="currency"
               defaultValue={editing?.currency ?? "BRL"}
               maxLength={3}
+              readOnly={Boolean(editing)}
+              aria-readonly={Boolean(editing)}
               required
             />
+            {editing && (
+              <p className="text-xs text-muted-foreground">
+                A moeda não pode ser alterada porque isso invalidaria o histórico da conta.
+              </p>
+            )}
           </div>
         </div>
         <div className="space-y-1">

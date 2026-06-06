@@ -3,9 +3,18 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { formatCurrency, formatDateBR, monthRange, previousMonth } from "@/lib/format";
 import { consolidateBalances, convertAmount, type ExchangeRate } from "@/lib/money";
-import { ArrowDownRight, ArrowUpRight, TrendingDown, TrendingUp, Wallet } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowDownRight,
+  ArrowUpRight,
+  TrendingDown,
+  TrendingUp,
+  Wallet,
+} from "lucide-react";
 import {
   ResponsiveContainer,
   BarChart,
@@ -43,21 +52,74 @@ type AccountBalance = {
   balance: number;
 };
 
+type ConvertibleTx = Pick<Tx, "type" | "amount" | "accounts">;
+
+type QueryResult = {
+  label: string;
+  error: { message: string } | null;
+};
+
+// Exported for unit coverage without requiring database access.
+// eslint-disable-next-line react-refresh/only-export-components
+export function assertDashboardQueriesSucceeded(results: QueryResult[]) {
+  const failures = results.filter((result) => result.error);
+  if (failures.length === 0) return;
+
+  const details = failures
+    .map((failure) => `${failure.label}: ${failure.error?.message}`)
+    .join("; ");
+  throw new Error(`Não foi possível carregar o dashboard. ${details}`);
+}
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function sumConvertedTransactions(
+  rows: ConvertibleTx[],
+  type: Tx["type"],
+  reportingCurrency: string,
+  rates: ExchangeRate[],
+) {
+  const missingCurrencies = new Set<string>();
+  let total = 0;
+
+  for (const row of rows) {
+    if (row.type !== type) continue;
+    const currency = row.accounts?.currency ?? "BRL";
+    const converted = convertAmount(Number(row.amount), currency, reportingCurrency, rates);
+    if (converted === null) {
+      missingCurrencies.add(currency);
+      continue;
+    }
+    total += converted;
+  }
+
+  return { total, missingCurrencies: Array.from(missingCurrencies).sort() };
+}
+
+function mergeMissingCurrencies(...groups: string[][]) {
+  return Array.from(new Set(groups.flat())).sort();
+}
+
+function partialValueHint(missingCurrencies: string[]) {
+  return missingCurrencies.length > 0
+    ? `Valor parcial. Sem taxa para: ${missingCurrencies.join(", ")}`
+    : undefined;
+}
+
 function DashboardPage() {
   const now = new Date();
   const curr = monthRange(now);
   const prev = monthRange(previousMonth(now));
 
-  const { data, isLoading } = useQuery({
+  const { data, error, isError, isFetching, isLoading, refetch } = useQuery({
     queryKey: ["dashboard", curr.start, prev.start],
     queryFn: async () => {
       const [
-        { data: currTx },
-        { data: prevTx },
-        { data: recent },
-        { data: accounts },
-        { data: settings },
-        { data: rates },
+        currTxResult,
+        prevTxResult,
+        recentResult,
+        accountsResult,
+        settingsResult,
+        ratesResult,
       ] = await Promise.all([
         supabase
           .from("transactions")
@@ -84,6 +146,22 @@ function DashboardPage() {
         supabase.from("exchange_rates").select("from_currency,to_currency,rate"),
       ]);
 
+      assertDashboardQueriesSucceeded([
+        { label: "movimentações do mês", error: currTxResult.error },
+        { label: "movimentações do mês anterior", error: prevTxResult.error },
+        { label: "movimentações recentes", error: recentResult.error },
+        { label: "saldos das contas", error: accountsResult.error },
+        { label: "configurações financeiras", error: settingsResult.error },
+        { label: "taxas de câmbio", error: ratesResult.error },
+      ]);
+
+      const currTx = currTxResult.data;
+      const prevTx = prevTxResult.data;
+      const recent = recentResult.data;
+      const accounts = accountsResult.data;
+      const settings = settingsResult.data;
+      const rates = ratesResult.data;
+
       return {
         currTx: (currTx ?? []) as unknown as Tx[],
         prevTx: (prevTx ?? []) as unknown as Pick<Tx, "type" | "amount" | "accounts">[],
@@ -106,29 +184,51 @@ function DashboardPage() {
 
   const reportingCurrency = data?.reportingCurrency ?? "BRL";
   const rates = data?.rates ?? [];
-  const sum = (rows: Pick<Tx, "type" | "amount" | "accounts">[], type: string) =>
-    rows
-      .filter((row) => row.type === type)
-      .reduce((total, row) => {
-        const converted = convertAmount(
-          Number(row.amount),
-          row.accounts?.currency ?? "BRL",
-          reportingCurrency,
-          rates,
-        );
-        return total + (converted ?? 0);
-      }, 0);
-
-  const currIncome = sum(data?.currTx ?? [], "income");
-  const currExpense = sum(data?.currTx ?? [], "expense");
-  const prevIncome = sum(data?.prevTx ?? [], "income");
-  const prevExpense = sum(data?.prevTx ?? [], "expense");
+  const currIncomeSummary = sumConvertedTransactions(
+    data?.currTx ?? [],
+    "income",
+    reportingCurrency,
+    rates,
+  );
+  const currExpenseSummary = sumConvertedTransactions(
+    data?.currTx ?? [],
+    "expense",
+    reportingCurrency,
+    rates,
+  );
+  const prevIncomeSummary = sumConvertedTransactions(
+    data?.prevTx ?? [],
+    "income",
+    reportingCurrency,
+    rates,
+  );
+  const prevExpenseSummary = sumConvertedTransactions(
+    data?.prevTx ?? [],
+    "expense",
+    reportingCurrency,
+    rates,
+  );
+  const currIncome = currIncomeSummary.total;
+  const currExpense = currExpenseSummary.total;
+  const prevIncome = prevIncomeSummary.total;
+  const prevExpense = prevExpenseSummary.total;
+  const currentMissingCurrencies = mergeMissingCurrencies(
+    currIncomeSummary.missingCurrencies,
+    currExpenseSummary.missingCurrencies,
+  );
+  const comparisonMissingCurrencies = mergeMissingCurrencies(
+    currentMissingCurrencies,
+    prevIncomeSummary.missingCurrencies,
+    prevExpenseSummary.missingCurrencies,
+  );
   const consolidated = consolidateBalances(data?.accounts ?? [], reportingCurrency, rates);
   const totalBalance = consolidated.total;
   const currResult = currIncome - currExpense;
   const prevResult = prevIncome - prevExpense;
   const variation =
-    prevResult === 0 ? null : ((currResult - prevResult) / Math.abs(prevResult)) * 100;
+    prevResult === 0 || comparisonMissingCurrencies.length > 0
+      ? null
+      : ((currResult - prevResult) / Math.abs(prevResult)) * 100;
 
   const byCategory = (() => {
     const map = new Map<string, { name: string; color: string; total: number }>();
@@ -155,17 +255,45 @@ function DashboardPage() {
     { name: "Mês atual", Entradas: currIncome, Saídas: currExpense },
   ];
 
+  const header = (
+    <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
+      <div>
+        <p className="text-xs uppercase tracking-widest text-muted-foreground">Visão geral</p>
+        <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Dashboard</h1>
+      </div>
+      <p className="text-sm text-muted-foreground">
+        {now.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}
+      </p>
+    </header>
+  );
+
+  if (isError) {
+    return (
+      <div className="space-y-6 max-w-7xl mx-auto">
+        {header}
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Erro ao carregar o dashboard</AlertTitle>
+          <AlertDescription className="space-y-3">
+            <p>{error instanceof Error ? error.message : "Ocorreu um erro inesperado."}</p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={isFetching}
+              onClick={() => void refetch()}
+            >
+              {isFetching ? "Tentando novamente..." : "Tentar novamente"}
+            </Button>
+          </AlertDescription>
+        </Alert>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
-      <header className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-2">
-        <div>
-          <p className="text-xs uppercase tracking-widest text-muted-foreground">Visão geral</p>
-          <h1 className="text-2xl md:text-3xl font-bold tracking-tight">Dashboard</h1>
-        </div>
-        <p className="text-sm text-muted-foreground">
-          {now.toLocaleDateString("pt-BR", { month: "long", year: "numeric" })}
-        </p>
-      </header>
+      {header}
 
       <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <KpiCard
@@ -185,6 +313,7 @@ function DashboardPage() {
           value={formatCurrency(currIncome, reportingCurrency)}
           icon={<ArrowUpRight className="h-4 w-4" />}
           accent="success"
+          hint={partialValueHint(currIncomeSummary.missingCurrencies)}
           loading={isLoading}
         />
         <KpiCard
@@ -192,6 +321,7 @@ function DashboardPage() {
           value={formatCurrency(currExpense, reportingCurrency)}
           icon={<ArrowDownRight className="h-4 w-4" />}
           accent="destructive"
+          hint={partialValueHint(currExpenseSummary.missingCurrencies)}
           loading={isLoading}
         />
         <KpiCard
@@ -206,9 +336,11 @@ function DashboardPage() {
           }
           accent={currResult >= 0 ? "success" : "destructive"}
           hint={
-            variation === null
-              ? "Sem comparação"
-              : `${variation >= 0 ? "+" : ""}${variation.toFixed(1)}% vs mês anterior`
+            comparisonMissingCurrencies.length > 0
+              ? partialValueHint(comparisonMissingCurrencies)
+              : variation === null
+                ? "Sem comparação"
+                : `${variation >= 0 ? "+" : ""}${variation.toFixed(1)}% vs mês anterior`
           }
           loading={isLoading}
         />
@@ -218,6 +350,12 @@ function DashboardPage() {
         <Card className="lg:col-span-2">
           <CardHeader>
             <CardTitle className="text-base">Entradas vs Saídas</CardTitle>
+            {comparisonMissingCurrencies.length > 0 && (
+              <p className="text-xs text-destructive">
+                {partialValueHint(comparisonMissingCurrencies)}. O gráfico não representa todas as
+                movimentações.
+              </p>
+            )}
           </CardHeader>
           <CardContent className="h-72">
             <ResponsiveContainer width="100%" height="100%">
@@ -227,7 +365,7 @@ function DashboardPage() {
                 <YAxis
                   stroke="var(--color-muted-foreground)"
                   fontSize={12}
-                  tickFormatter={(v) => `R$${Math.round(v / 1000)}k`}
+                  tickFormatter={(value) => formatCurrency(Number(value), reportingCurrency)}
                 />
                 <Tooltip
                   contentStyle={{
@@ -248,6 +386,12 @@ function DashboardPage() {
         <Card>
           <CardHeader>
             <CardTitle className="text-base">Despesas por categoria</CardTitle>
+            {currExpenseSummary.missingCurrencies.length > 0 && (
+              <p className="text-xs text-destructive">
+                {partialValueHint(currExpenseSummary.missingCurrencies)}. O gráfico não representa
+                todas as despesas.
+              </p>
+            )}
           </CardHeader>
           <CardContent className="h-72">
             {byCategory.length === 0 ? (

@@ -15,11 +15,25 @@ DROP POLICY IF EXISTS "own transactions insert" ON public.transactions;
 DROP POLICY IF EXISTS "own transactions update" ON public.transactions;
 DROP POLICY IF EXISTS "own transactions delete" ON public.transactions;
 
+-- Transfer entries did not exist before Story 1.1 and must not become
+-- ordinary income/expense rows when transfer_id is removed.
+DELETE FROM public.transactions
+WHERE transfer_id IS NOT NULL;
+
 ALTER TABLE public.transactions
   DROP CONSTRAINT IF EXISTS transactions_transfer_user_fkey,
   DROP CONSTRAINT IF EXISTS transactions_account_user_fkey,
+  DROP CONSTRAINT IF EXISTS transactions_category_user_fkey,
   DROP COLUMN IF EXISTS transfer_id,
   DROP COLUMN IF EXISTS account_id;
+
+ALTER TABLE public.transactions
+  ADD CONSTRAINT transactions_category_id_fkey
+    FOREIGN KEY (category_id)
+    REFERENCES public.categories(id) ON DELETE SET NULL;
+
+ALTER TABLE public.categories
+  DROP CONSTRAINT IF EXISTS categories_id_user_key;
 
 CREATE POLICY "own transactions"
   ON public.transactions FOR ALL TO authenticated
@@ -62,4 +76,3 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
 
 COMMIT;
-

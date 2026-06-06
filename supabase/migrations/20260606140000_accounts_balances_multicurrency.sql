@@ -1,5 +1,7 @@
 -- Story 1.1: accounts, balances, manual exchange rates, and transfers.
 
+BEGIN;
+
 CREATE TYPE public.account_type AS ENUM (
   'checking',
   'savings',
@@ -58,6 +60,8 @@ CREATE TABLE public.transfers (
   occurred_on DATE NOT NULL DEFAULT CURRENT_DATE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CONSTRAINT transfers_distinct_accounts_check
+    CHECK (from_account_id <> to_account_id),
   UNIQUE (id, user_id),
   FOREIGN KEY (from_account_id, user_id)
     REFERENCES public.accounts(id, user_id) ON DELETE RESTRICT,
@@ -110,8 +114,15 @@ BEGIN
 END;
 $$;
 
+ALTER TABLE public.categories
+  ADD CONSTRAINT categories_id_user_key UNIQUE (id, user_id);
+
 ALTER TABLE public.transactions
+  DROP CONSTRAINT transactions_category_id_fkey,
   ALTER COLUMN account_id SET NOT NULL,
+  ADD CONSTRAINT transactions_category_user_fkey
+    FOREIGN KEY (category_id, user_id)
+    REFERENCES public.categories(id, user_id) ON DELETE RESTRICT,
   ADD CONSTRAINT transactions_account_user_fkey
     FOREIGN KEY (account_id, user_id)
     REFERENCES public.accounts(id, user_id) ON DELETE RESTRICT,
@@ -453,6 +464,21 @@ BEGIN
   IF v_source_currency <> v_destination_currency THEN
     RAISE EXCEPTION 'Destination account must use the same currency';
   END IF;
+  IF EXISTS (
+    SELECT 1
+    FROM public.transfers
+    WHERE user_id = v_user_id
+      AND (
+        (from_account_id = p_account_id
+          AND to_account_id = p_destination_account_id)
+        OR
+        (from_account_id = p_destination_account_id
+          AND to_account_id = p_account_id)
+      )
+  ) THEN
+    RAISE EXCEPTION
+      'Delete transfers between source and destination accounts before reassignment';
+  END IF;
 
   UPDATE public.accounts
   SET initial_balance = initial_balance + v_source_initial_balance
@@ -526,3 +552,5 @@ END;
 $$;
 
 REVOKE EXECUTE ON FUNCTION public.handle_new_user() FROM PUBLIC, anon, authenticated;
+
+COMMIT;
