@@ -76,12 +76,12 @@ CREATE INDEX transfers_to_account_idx ON public.transfers(to_account_id);
 
 -- Existing data is BRL because the current application formats every value as BRL.
 INSERT INTO public.accounts (user_id, name, type, currency, initial_balance)
-SELECT p.id, 'Conta principal', 'checking', 'BRL', 0
+SELECT p.id, 'Conta principal', 'checking'::public.account_type, 'BRL', 0
 FROM public.profiles p
 ON CONFLICT DO NOTHING;
 
 INSERT INTO public.accounts (user_id, name, type, currency, initial_balance)
-SELECT DISTINCT t.user_id, 'Conta principal', 'checking', 'BRL', 0
+SELECT DISTINCT t.user_id, 'Conta principal', 'checking'::public.account_type, 'BRL', 0
 FROM public.transactions t
 WHERE NOT EXISTS (
   SELECT 1 FROM public.accounts a WHERE a.user_id = t.user_id

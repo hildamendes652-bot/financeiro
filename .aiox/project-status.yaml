@@ -4,15 +4,17 @@ status:
     - .aiox/project-status.yaml
     - .gitignore
     - docs/stories/1.1.contas-saldos-multimoedas.md
-    - eslint.config.js
-  modifiedFilesTotalCount: 4
+    - supabase/config.toml
+    - supabase/migrations/20260606140000_accounts_balances_multicurrency.sql
+  modifiedFilesTotalCount: 5
   recentCommits:
-    - 'fix: update vercel serverDir path to __server.func'
-    - 'chore: redirect nitro output to .vercel/output'
+    - 'docs: define supabase mcp workflow'
+    - 'docs: document supabase env setup'
+    - 'feat: implementa story 1.1 — contas, saldos e multimoedas'
   currentEpic: null
   currentStory: null
-  lastUpdate: '2026-06-06T18:21:48.731Z'
+  lastUpdate: '2026-06-13T13:49:18Z'
   isGitRepo: true
-timestamp: 1780770108732
+timestamp: 1781358558000
 ttl: 60
-gitFingerprint: 1780755491139.1504:1780757611789.9238
+gitFingerprint: 1780755491139.1504:1780770627727.6482
